@@ -185,13 +185,18 @@ tfoot td { border-top: 1.5px solid var(--border2); padding: 10px; font-weight: 7
       <button class="tab active" onclick="switchTab('boss')">老闆摘要</button>
       <button class="tab" onclick="switchTab('revenue')">收入認列</button>
       <button class="tab" onclick="switchTab('trainer')">教練銷課</button>
-      <button class="tab" onclick="switchTab('chart')">圖表</button>
+      <button class="tab" onclick="switchTab('inventory')">庫存預警</button>
+      <button class="tab" onclick="switchTab('chart')">教練分層</button>
       <button class="tab" id="compareTab" style="display:none" onclick="switchTab('compare')">月份比較</button>
     </div>
 
     <div class="tab-panel active" id="tab-boss"><div id="boss-content"></div></div>
     <div class="tab-panel" id="tab-revenue">
       <div class="metrics" id="rev-metrics"></div>
+      <div class="card" id="unknownItems" style="display:none;border-color:#e8a800;background:#fffbf0">
+        <div class="card-title" style="color:#7a5000">⚠️ 未識別品項（未計入收入）</div>
+        <div class="unknown-body"></div>
+      </div>
       <div class="card"><div class="card-title">場租儲值明細（教練購堂）</div><div id="rentItems"></div></div>
       <div class="card"><div class="card-title">會籍收入明細</div><div id="memberItems"></div></div>
     </div>
@@ -209,9 +214,9 @@ tfoot td { border-top: 1.5px solid var(--border2); padding: 10px; font-weight: 7
       </div>
     </div>
     <div class="tab-panel" id="tab-chart">
-      <div class="card"><div class="card-title">教練銷課金額</div><div class="chart-wrap" id="chartWrap1" style="height:400px"><canvas id="chart1"></canvas></div></div>
-      <div class="card"><div class="card-title">收入來源組成</div><div class="chart-wrap" style="height:280px"><canvas id="chart2"></canvas></div></div>
+      <div id="chart-content"></div>
     </div>
+    <div class="tab-panel" id="tab-inventory"><div id="inventory-content"></div></div>
     <div class="tab-panel" id="tab-compare"><div id="compare-content"></div></div>
 
     <div class="footer-actions">
@@ -259,7 +264,6 @@ function checkReady() {
   if(rawSchedule && rawTx) {
     btn.disabled=false;
     btn.textContent='▶ 開始分析';
-    analyze();
   }
 }
 [1,2,3,4].forEach(i=>setupDrop('box'+i,'file'+i,'name'+i,i));
@@ -300,7 +304,7 @@ function parseTx(raw) {
   const col=name=>headers.indexOf(name);
   const iType=col('交易項目'),iPlan=col('方案/商品名稱'),iAmt=col('實收金額(元)'),iTotal=col('總計(元)');
   const iQty=col('數量'),iUnit=col('單位'),iName=col('會員姓名'),iDate=col('交易日期');
-  const rent=[],member=[];
+  const rent=[],member=[],unknown=[],purchases=[];
   rows.forEach(r=>{
     const type=String(r[iType]||'').trim();
     const plan=String(r[iPlan]||'').trim().replace(/\t/g,'');
@@ -311,7 +315,14 @@ function parseTx(raw) {
     const name=String(r[iName]||'').trim();
     const date=String(r[iDate]||'').trim();
     if(name==='假教練'||plan==='堂數') return;
-    if(type==='儲值'&&amt>0&&(plan.includes('場租')||plan.includes('置物櫃'))) rent.push({name,plan,qty,unit,amt,date});
+    if(type==='儲值'&&amt>0) {
+      if(plan.includes('場租')||plan.includes('置物櫃')||plan.includes('PFT')) {
+        rent.push({name,plan,qty,unit,amt,date});
+        if(plan.includes('場租')) purchases.push({name,plan,qty,amt,date});
+      } else {
+        unknown.push({name,plan,qty,unit,amt,date,type});
+      }
+    }
     if(type==='定期通行卡'&&amt>0) {
       if(plan==='年約會員') {
         const monthly=Math.round(total/12);
@@ -323,28 +334,28 @@ function parseTx(raw) {
       }
     }
   });
-  return {rent,member};
+  return {rent,member,unknown,purchases};
 }
 
-function calcRevenue(rent,member) {
+function calcRevenue(rent,member,unknown,purchases) {
   const rentTotal=rent.reduce((s,r)=>s+r.amt,0);
   const memberRecognized=member.reduce((s,r)=>s+r.recognized,0);
-  return {rent,member,rentTotal,memberRecognized,totalRevenue:rentTotal+memberRecognized};
+  return {rent,member,unknown,purchases,rentTotal,memberRecognized,totalRevenue:rentTotal+memberRecognized};
 }
 
 // ── ANALYZE ────────────────────────────────────────────
 function analyze() {
   if(!rawSchedule||!rawTx) return;
   const trainerData=parseSchedule(rawSchedule,true);
-  const {rent,member}=parseTx(rawTx);
-  const revData=calcRevenue(rent,member);
+  const {rent,member,unknown,purchases}=parseTx(rawTx);
+  const revData=calcRevenue(rent,member,unknown,purchases);
   exportTrainer=trainerData; exportRevenue=revData;
 
   // prev period
   if(rawSchedulePrev&&rawTxPrev) {
     prevTrainer=parseSchedule(rawSchedulePrev,false);
-    const {rent:pr,member:pm}=parseTx(rawTxPrev);
-    prevRevenue=calcRevenue(pr,pm);
+    const {rent:pr,member:pm,unknown:pu,purchases:pp}=parseTx(rawTxPrev);
+    prevRevenue=calcRevenue(pr,pm,pu,pp);
     document.getElementById('compareTab').style.display='';
     renderCompare(trainerData,revData,prevTrainer,prevRevenue);
   } else {
@@ -355,7 +366,8 @@ function analyze() {
   renderBoss(trainerData,revData);
   renderRevenue(trainerData,revData);
   renderTrainer(trainerData);
-  renderCharts(trainerData,revData);
+  renderInventory(trainerData,revData);
+  renderCharts(trainerData,revData,prevTrainer);
   document.getElementById('uploadSection').style.display='none';
   document.getElementById('results').style.display='block';
 }
@@ -395,6 +407,27 @@ function renderRevenue(trainerData,revData) {
     </div><div class="detail-block" id="mem-${i}">${details}</div></div>`;
   }).join('');
   document.getElementById('memberItems').innerHTML=memHTML+`<div class="rev-total"><div class="rev-total-label">小計（認列）</div><div class="rev-total-amt">$${memberRecognized.toLocaleString()}</div></div>`;
+
+  // Unknown items warning
+  const unknownEl = document.getElementById('unknownItems');
+  if(revData.unknown && revData.unknown.length > 0) {
+    const uByPlan={};
+    revData.unknown.forEach(r=>{
+      if(!uByPlan[r.plan]) uByPlan[r.plan]={plan:r.plan,count:0,total:0,items:[]};
+      uByPlan[r.plan].count++; uByPlan[r.plan].total+=r.amt; uByPlan[r.plan].items.push(r);
+    });
+    const uHTML=Object.values(uByPlan).map((p,i)=>{
+      const details=p.items.map(r=>`<div class="detail-row"><span class="detail-name">${r.name}</span><span class="detail-date">${r.date}</span><span class="detail-amt">$${r.amt.toLocaleString()}</span></div>`).join('');
+      return `<div class="rev-group"><div class="rev-item expandable" onclick="toggleDetail('unk-${i}')">
+        <div style="flex:1"><div class="rev-name">⚠️ ${p.plan} <span class="count-badge">${p.count} 筆</span></div></div>
+        <div style="display:flex;align-items:center;gap:10px"><div class="rev-amt">$${p.total.toLocaleString()}</div><span class="expand-icon" id="icon-unk-${i}">▸</span></div>
+      </div><div class="detail-block" id="unk-${i}">${details}</div></div>`;
+    }).join('');
+    unknownEl.style.display='block';
+    unknownEl.querySelector('.unknown-body').innerHTML=uHTML+`<div style="padding:8px 0;font-size:12px;color:var(--amber)">⚠️ 以上 ${revData.unknown.length} 筆未歸類，請告知 Claude 如何處理</div>`;
+  } else {
+    unknownEl.style.display='none';
+  }
 }
 
 // ── TRAINER TAB ────────────────────────────────────────
@@ -455,6 +488,7 @@ function renderBoss(trainerData,revData) {
         <div class="metric accent"><div class="metric-label">當期收入</div><div class="metric-val">$${totalRevenue.toLocaleString()}</div><div class="metric-sub">場租 + 會籍</div></div>
         <div class="metric accent"><div class="metric-label">教練銷課</div><div class="metric-val">${totalSessions} 堂</div><div class="metric-sub">${trainerCount} 位教練・$${trainerAmt.toLocaleString()}</div></div>
         <div class="metric"><div class="metric-label">場租儲值</div><div class="metric-val">$${rentTotal.toLocaleString()}</div><div class="metric-sub">會籍認列 $${memberRecognized.toLocaleString()}</div></div>
+        ${revData.unknown&&revData.unknown.length>0?`<div class="metric" style="border-color:#e8a800;background:#fffbf0"><div class="metric-label" style="color:#7a5000">⚠️ 未識別品項</div><div class="metric-val" style="color:#7a5000;font-size:16px">${revData.unknown.length} 筆・$${revData.unknown.reduce((s,r)=>s+r.amt,0).toLocaleString()}</div><div class="metric-sub" style="color:#7a5000">請至收入認列分頁查看</div></div>`:''}
       </div>
     </div>
     <div class="two-col">
@@ -470,6 +504,104 @@ function renderBoss(trainerData,revData) {
         <tbody>${ranked.map(([name,v],i)=>`<tr><td style="width:28px"><span class="rank-no ${i<3?'top':''}">${i+1}</span></td><td>${name}</td><td class="r">${v.sessions}</td><td class="r">$${v.amt.toLocaleString()}</td></tr>`).join('')}</tbody>
         <tfoot><tr><td colspan="2">合計</td><td class="r">${totalSessions}</td><td class="r">$${trainerAmt.toLocaleString()}</td></tr></tfoot></table>
       </div>
+    </div>`;
+}
+
+// ── INVENTORY TAB ─────────────────────────────────────
+function renderInventory(trainerData, revData) {
+  const purchases = revData.purchases || [];
+
+  // 本期有購堂的教練
+  const boughtSet = new Set();
+  purchases.forEach(p => {
+    const key = p.name.trim();
+    boughtSet.add(key);
+    // also add partial matches
+  });
+
+  // 所有有銷課的教練
+  const usageMap = {};
+  trainerData.forEach(r => {
+    const key = r.trainer.trim();
+    if (!usageMap[key]) usageMap[key] = { sessions: 0 };
+    usageMap[key].sessions += r.total;
+  });
+
+  // 購堂彙總（fuzzy match）
+  const purchaseMap = {};
+  purchases.forEach(p => {
+    const key = p.name.trim();
+    if (!purchaseMap[key]) purchaseMap[key] = { qty: 0, plans: [] };
+    purchaseMap[key].qty += p.qty;
+    purchaseMap[key].plans.push(p.plan.replace(/場租\//,'').replace(/	/g,''));
+  });
+
+  function hasPurchase(trainerName) {
+    if (purchaseMap[trainerName]) return purchaseMap[trainerName];
+    for (const key of Object.keys(purchaseMap)) {
+      if (trainerName.includes(key) || key.includes(trainerName)) return purchaseMap[key];
+    }
+    return null;
+  }
+
+  const needContact = [];
+  const hasBought = [];
+
+  Object.entries(usageMap).sort((a,b)=>b[1].sessions-a[1].sessions).forEach(([name, u]) => {
+    const p = hasPurchase(name);
+    if (p) {
+      hasBought.push({ name, sessions: u.sessions, bought: p.qty, plans: p.plans });
+    } else {
+      needContact.push({ name, sessions: u.sessions });
+    }
+  });
+
+  document.getElementById('inventory-content').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:1.5rem">
+      <div class="metric" style="${needContact.length>0?'border-color:#c0392b;background:#fdf0ef':''}">
+        <div class="metric-label" style="${needContact.length>0?'color:#8b2020':''}">本期未購堂</div>
+        <div class="metric-val" style="${needContact.length>0?'color:#8b2020':''}">${needContact.length} 位</div>
+        <div class="metric-sub">${needContact.length>0?'需要主動聯繫':'—'}</div>
+      </div>
+      <div class="metric" style="border-color:var(--green);background:var(--green-bg)">
+        <div class="metric-label" style="color:var(--green)">本期有購堂</div>
+        <div class="metric-val" style="color:var(--green)">${hasBought.length} 位</div>
+        <div class="metric-sub">庫存正常</div>
+      </div>
+    </div>
+
+    ${needContact.length > 0 ? `
+    <div class="card" style="border-color:#c0392b;background:#fdf0ef;margin-bottom:1.25rem">
+      <div class="card-title" style="color:#8b2020;margin-bottom:.5rem">🔴 本期未見購堂，需要聯繫（${needContact.length} 位）</div>
+      <p style="font-size:12px;color:#8b2020;margin-bottom:1rem">這些教練本期有銷課但沒有購堂紀錄，表示在消耗舊庫存，要主動跟進是否需要續買。</p>
+      <table>
+        <thead><tr><th>教練</th><th class="r">本期銷課堂數</th><th>建議行動</th></tr></thead>
+        <tbody>${needContact.map(r=>`
+          <tr>
+            <td><strong>${r.name}</strong></td>
+            <td class="r">${r.sessions}</td>
+            <td style="font-size:12px;color:#8b2020">主動詢問是否需要續購</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : `
+    <div class="card" style="border-color:var(--green);background:var(--green-bg);margin-bottom:1.25rem">
+      <div style="text-align:center;padding:1rem;color:var(--green);font-size:14px;font-weight:500">✅ 本期所有教練均有購堂紀錄</div>
+    </div>`}
+
+    <div class="card">
+      <div class="card-title">✅ 本期有購堂教練（${hasBought.length} 位）</div>
+      <table>
+        <thead><tr><th>教練</th><th class="r">本期銷課</th><th class="r">本期購堂</th><th>購堂方案</th></tr></thead>
+        <tbody>${hasBought.map(r=>`
+          <tr>
+            <td>${r.name}</td>
+            <td class="r">${r.sessions}</td>
+            <td class="r c-green">${r.bought}</td>
+            <td style="font-size:11px;color:var(--text3)">${r.plans.join('、')}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
     </div>`;
 }
 
@@ -546,32 +678,102 @@ function renderCompare(curTrainer,curRev,prvTrainer,prvRev) {
     </div>`;
 }
 
-// ── CHARTS ─────────────────────────────────────────────
-function renderCharts(trainerData,revData) {
-  const {rentTotal,memberRecognized}=revData;
-  const trainerMap={};
-  trainerData.forEach(r=>{trainerMap[r.trainer]=(trainerMap[r.trainer]||0)+r.arrAmt;});
-  const sorted=Object.entries(trainerMap).sort((a,b)=>b[1]-a[1]);
-  const h=Math.max(300,sorted.length*34+60);
-  document.getElementById('chartWrap1').style.height=h+'px';
-  if(chart1Instance) chart1Instance.destroy();
-  chart1Instance=new Chart(document.getElementById('chart1'),{
-    type:'bar',
-    data:{labels:sorted.map(e=>e[0]),datasets:[{data:sorted.map(e=>e[1]),backgroundColor:'#1a1908',borderRadius:4,borderSkipped:false}]},
-    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` $${c.parsed.x.toLocaleString()}`}}},
-      scales:{x:{ticks:{callback:v=>'$'+v.toLocaleString(),font:{size:11}},grid:{color:'rgba(0,0,0,0.05)'}},y:{ticks:{font:{size:11}},grid:{display:false}}}}
+// ── TRAINER TIER TAB ──────────────────────────────────
+function renderCharts(trainerData, revData, prevTrainerData) {
+  // Build current period trainer map
+  const curMap = {};
+  trainerData.forEach(r => {
+    if (!curMap[r.trainer]) curMap[r.trainer] = { sessions: 0, amt: 0 };
+    curMap[r.trainer].sessions += r.total;
+    curMap[r.trainer].amt += r.arrAmt;
   });
-  if(chart2Instance) chart2Instance.destroy();
-  chart2Instance=new Chart(document.getElementById('chart2'),{
-    type:'doughnut',
-    data:{labels:['場租儲值','會籍認列'],datasets:[{data:[rentTotal,memberRecognized],backgroundColor:['#1a1908','#a8a78a'],borderWidth:0}]},
-    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{font:{size:12},boxWidth:14}},tooltip:{callbacks:{label:c=>` $${c.parsed.toLocaleString()}`}}}}
+
+  // Build prev period trainer map (if available)
+  const prvMap = {};
+  if (prevTrainerData && prevTrainerData.length) {
+    prevTrainerData.forEach(r => {
+      if (!prvMap[r.trainer]) prvMap[r.trainer] = { sessions: 0, amt: 0 };
+      prvMap[r.trainer].sessions += r.total;
+      prvMap[r.trainer].amt += r.arrAmt;
+    });
+  }
+
+  const hasPrev = Object.keys(prvMap).length > 0;
+  const trainers = Object.entries(curMap).sort((a,b)=>b[1].sessions-a[1].sessions);
+  const totalSessions = trainers.reduce((s,[,v])=>s+v.sessions,0);
+
+  // Tier logic
+  function getTier(name, cur) {
+    if (hasPrev) {
+      const prv = prvMap[name];
+      if (!prv) return 'new';
+      const delta = cur.sessions - prv.sessions;
+      const pct = prv.sessions ? delta / prv.sessions : 0;
+      if (pct >= 0.15 || delta >= 5) return 'growing';
+      if (pct <= -0.15 || delta <= -5) return 'watch';
+      return 'core';
+    } else {
+      // single period: by volume
+      if (cur.sessions >= 20) return 'core';
+      if (cur.sessions >= 8) return 'mid';
+      return 'low';
+    }
+  }
+
+  const tiers = hasPrev
+    ? { core: { label:'🏆 穩定核心', desc:'堂數穩定，變動 ±15% 以內', color:'#1a1908', bg:'#f0efe9', items:[] },
+        growing: { label:'📈 成長中', desc:'本期堂數明顯增加', color:'#2d6a2d', bg:'#eaf3e0', items:[] },
+        watch: { label:'⚠️ 需關注', desc:'本期堂數明顯下滑', color:'#8b2020', bg:'#fdf0ef', items:[] },
+        new: { label:'🆕 新進教練', desc:'上期未出現，本期首次', color:'#1a3d6b', bg:'#e8f0fb', items:[] } }
+    : { core: { label:'🏆 高量教練', desc:'≥ 20 堂', color:'#1a1908', bg:'#f0efe9', items:[] },
+        mid: { label:'📊 中量教練', desc:'8–19 堂', color:'#1a3d6b', bg:'#e8f0fb', items:[] },
+        low: { label:'🌱 低量教練', desc:'< 8 堂', color:'#7a5000', bg:'#fef3d8', items:[] } };
+
+  trainers.forEach(([name, cur]) => {
+    const tier = getTier(name, cur);
+    const prv = prvMap[name];
+    const delta = prv ? cur.sessions - prv.sessions : null;
+    const deltaStr = delta !== null ? (delta > 0 ? `+${delta}` : `${delta}`) : null;
+    tiers[tier].items.push({ name, sessions: cur.sessions, amt: cur.amt, deltaStr, pct: totalSessions ? Math.round(cur.sessions/totalSessions*100) : 0 });
   });
+
+  // Render tier cards
+  const tierCards = Object.values(tiers).filter(t=>t.items.length>0).map(tier => `
+    <div class="card" style="border-color:${tier.color}20;margin-bottom:1.25rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+        <div>
+          <div style="font-size:14px;font-weight:700;color:${tier.color}">${tier.label}</div>
+          <div style="font-size:11px;color:var(--text3);margin-top:2px">${tier.desc}</div>
+        </div>
+        <div style="background:${tier.bg};color:${tier.color};font-family:var(--mono);font-size:12px;padding:4px 12px;border-radius:99px;font-weight:500">${tier.items.length} 位</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${tier.items.map(t => `
+          <div style="display:flex;align-items:center;gap:10px;padding:7px 10px;background:${tier.bg};border-radius:8px">
+            <div style="flex:1;font-size:13px;font-weight:500">${t.name}</div>
+            <div style="font-size:12px;color:var(--text3);font-family:var(--mono)">${t.pct}%</div>
+            ${t.deltaStr ? `<div style="font-size:12px;font-family:var(--mono);color:${t.deltaStr.startsWith('+')?'var(--green)':'var(--red)'}">${t.deltaStr}堂</div>` : ''}
+            <div style="font-size:13px;font-family:var(--mono);font-weight:500;min-width:50px;text-align:right">${t.sessions} 堂</div>
+            <div style="font-size:12px;color:var(--text3);font-family:var(--mono);min-width:70px;text-align:right">$${t.amt.toLocaleString()}</div>
+            <div style="width:80px;background:rgba(0,0,0,0.08);border-radius:3px;height:5px;overflow:hidden">
+              <div style="width:${t.pct}%;height:100%;background:${tier.color};border-radius:3px"></div>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>`).join('');
+
+  document.getElementById('chart-content').innerHTML = `
+    <div style="margin-bottom:1.5rem">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:4px">
+        ${hasPrev ? '比較上期，依堂數變化幅度分層' : '單期資料，依堂數高低分層（上傳上期資料後可顯示趨勢）'}
+      </div>
+    </div>
+    ${tierCards}`;
 }
 
 // ── TABS ───────────────────────────────────────────────
 function switchTab(id) {
-  const ids=['boss','revenue','trainer','chart','compare'];
+  const ids=['boss','revenue','trainer','inventory','chart','compare'];
   document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',ids[i]===id));
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('tab-'+id).classList.add('active');
