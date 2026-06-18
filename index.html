@@ -193,11 +193,15 @@ tfoot td { border-top: 1.5px solid var(--border2); padding: 10px; font-weight: 7
     <div class="tab-panel active" id="tab-boss"><div id="boss-content"></div></div>
     <div class="tab-panel" id="tab-revenue">
       <div class="metrics" id="rev-metrics"></div>
+      <div class="card" style="margin-bottom:1.25rem">
+        <div class="card-title">銷課實現明細（課表核銷）</div>
+        <div id="sessionItems"></div>
+      </div>
       <div class="card" id="unknownItems" style="display:none;border-color:#e8a800;background:#fffbf0">
         <div class="card-title" style="color:#7a5000">⚠️ 未識別品項（未計入收入）</div>
         <div class="unknown-body"></div>
       </div>
-      <div class="card"><div class="card-title">場租儲值明細（教練購堂）</div><div id="rentItems"></div></div>
+      <div class="card"><div class="card-title" style="color:var(--text3)">場租預收款明細（教練購堂，未計入當期收入）</div><div id="rentItems"></div></div>
       <div class="card"><div class="card-title">會籍收入明細</div><div id="memberItems"></div></div>
     </div>
     <div class="tab-panel" id="tab-trainer">
@@ -316,7 +320,7 @@ function parseTx(raw) {
     const date=String(r[iDate]||'').trim();
     if(name==='假教練'||plan==='堂數') return;
     if(type==='儲值'&&amt>0) {
-      if(plan.includes('場租')||plan.includes('置物櫃')||plan.includes('PFT')) {
+      if(plan.includes('場租')||plan.includes('置物櫃')||plan.includes('PFT')||plan.includes('Inbody')) {
         rent.push({name,plan,qty,unit,amt,date});
         if(plan.includes('場租')) purchases.push({name,plan,qty,amt,date});
       } else {
@@ -337,10 +341,13 @@ function parseTx(raw) {
   return {rent,member,unknown,purchases};
 }
 
-function calcRevenue(rent,member,unknown,purchases) {
-  const rentTotal=rent.reduce((s,r)=>s+r.amt,0);
+function calcRevenue(rent,member,unknown,purchases,trainerData) {
+  const rentTotal=rent.reduce((s,r)=>s+r.amt,0); // 預收款（現金流入）
   const memberRecognized=member.reduce((s,r)=>s+r.recognized,0);
-  return {rent,member,unknown,purchases,rentTotal,memberRecognized,totalRevenue:rentTotal+memberRecognized};
+  // 實現收入 = 當期實際銷課金額（核銷制）
+  const sessionRealized=trainerData.reduce((s,r)=>s+r.arrAmt,0);
+  const totalRevenue=sessionRealized+memberRecognized;
+  return {rent,member,unknown,purchases,rentTotal,memberRecognized,sessionRealized,totalRevenue};
 }
 
 // ── ANALYZE ────────────────────────────────────────────
@@ -348,14 +355,14 @@ function analyze() {
   if(!rawSchedule||!rawTx) return;
   const trainerData=parseSchedule(rawSchedule,true);
   const {rent,member,unknown,purchases}=parseTx(rawTx);
-  const revData=calcRevenue(rent,member,unknown,purchases);
+  const revData=calcRevenue(rent,member,unknown,purchases,trainerData);
   exportTrainer=trainerData; exportRevenue=revData;
 
   // prev period
   if(rawSchedulePrev&&rawTxPrev) {
     prevTrainer=parseSchedule(rawSchedulePrev,false);
     const {rent:pr,member:pm,unknown:pu,purchases:pp}=parseTx(rawTxPrev);
-    prevRevenue=calcRevenue(pr,pm,pu,pp);
+    prevRevenue=calcRevenue(pr,pm,pu,pp,prevTrainer);
     document.getElementById('compareTab').style.display='';
     renderCompare(trainerData,revData,prevTrainer,prevRevenue);
   } else {
@@ -374,11 +381,12 @@ function analyze() {
 
 // ── REVENUE TAB ────────────────────────────────────────
 function renderRevenue(trainerData,revData) {
-  const {rent,member,rentTotal,memberRecognized,totalRevenue}=revData;
+  const {rent,member,rentTotal,memberRecognized,totalRevenue,sessionRealized}=revData;
   document.getElementById('rev-metrics').innerHTML=`
-    <div class="metric accent"><div class="metric-label">當期總收入</div><div class="metric-val">$${totalRevenue.toLocaleString()}</div><div class="metric-sub">元</div></div>
-    <div class="metric"><div class="metric-label">場租儲值</div><div class="metric-val">$${rentTotal.toLocaleString()}</div><div class="metric-sub">${rent.length} 筆</div></div>
-    <div class="metric"><div class="metric-label">會籍認列</div><div class="metric-val">$${memberRecognized.toLocaleString()}</div><div class="metric-sub">${member.length} 筆</div></div>`;
+    <div class="metric accent"><div class="metric-label">當期實現收入</div><div class="metric-val">$${totalRevenue.toLocaleString()}</div><div class="metric-sub">銷課核銷 + 會籍</div></div>
+    <div class="metric"><div class="metric-label">銷課實現</div><div class="metric-val">$${sessionRealized.toLocaleString()}</div><div class="metric-sub">課表堂數 × 單價</div></div>
+    <div class="metric"><div class="metric-label">會籍認列</div><div class="metric-val">$${memberRecognized.toLocaleString()}</div><div class="metric-sub">${member.length} 筆</div></div>
+    <div class="metric" style="border-style:dashed"><div class="metric-label" style="color:var(--text3)">場租預收款</div><div class="metric-val" style="color:var(--text3)">$${rentTotal.toLocaleString()}</div><div class="metric-sub">現金流入，未計入收入</div></div>`;
 
   const rentByPlan={};
   rent.forEach(r=>{
@@ -392,7 +400,7 @@ function renderRevenue(trainerData,revData) {
       <div style="display:flex;align-items:center;gap:10px"><div class="rev-amt">$${p.total.toLocaleString()}</div><span class="expand-icon" id="icon-rent-${i}">▸</span></div>
     </div><div class="detail-block" id="rent-${i}">${details}</div></div>`;
   }).join('');
-  document.getElementById('rentItems').innerHTML=rentHTML+`<div class="rev-total"><div class="rev-total-label">小計</div><div class="rev-total-amt">$${rentTotal.toLocaleString()}</div></div>`;
+  document.getElementById('rentItems').innerHTML=rentHTML+`<div class="rev-total"><div class="rev-total-label" style="color:var(--text3)">預收款小計</div><div class="rev-total-amt" style="color:var(--text3)">$${rentTotal.toLocaleString()}</div></div>`;
 
   const memByPlan={};
   member.forEach(r=>{
@@ -409,6 +417,36 @@ function renderRevenue(trainerData,revData) {
   document.getElementById('memberItems').innerHTML=memHTML+`<div class="rev-total"><div class="rev-total-label">小計（認列）</div><div class="rev-total-amt">$${memberRecognized.toLocaleString()}</div></div>`;
 
   // Unknown items warning
+  // Render session realized section
+  const trainerRevMap={};
+  revData.sessionRealized; // already computed
+  // show per-trainer breakdown in revenue tab (grouped)
+  const d1v1=trainerData.filter(r=>!r.course.toLowerCase().includes('1v2')&&!r.course.includes('一對二'));
+  const d1v2=trainerData.filter(r=>r.course.toLowerCase().includes('1v2')||r.course.includes('一對二'));
+  function sessionGroup(data,label,badgeClass) {
+    if(!data.length) return '';
+    const tot=data.reduce((s,r)=>s+r.total,0);
+    const amt=data.reduce((s,r)=>s+r.arrAmt,0);
+    // group by price
+    const byPrice={};
+    data.forEach(r=>{const k=r.price;if(!byPrice[k])byPrice[k]={price:k,sessions:0,amt:0};byPrice[k].sessions+=r.total;byPrice[k].amt+=r.arrAmt;});
+    return `<div style="margin-bottom:8px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <span class="badge ${badgeClass}" style="font-size:11px;padding:3px 10px">${label}</span>
+        <span style="font-size:11px;color:var(--text3);font-family:var(--mono)">${tot} 堂・$${amt.toLocaleString()}</span>
+      </div>
+      ${Object.values(byPrice).sort((a,b)=>b.amt-a.amt).map(p=>`
+        <div class="rev-item" style="padding:6px 0">
+          <div class="rev-name">單價 $${p.price} × ${p.sessions} 堂</div>
+          <div class="rev-amt">$${p.amt.toLocaleString()}</div>
+        </div>`).join('')}
+    </div>`;
+  }
+  document.getElementById('sessionItems').innerHTML=
+    sessionGroup(d1v1,'1v1 一對一','b1v1')+
+    sessionGroup(d1v2,'1v2 一對二','b1v2')+
+    `<div class="rev-total"><div class="rev-total-label">銷課小計</div><div class="rev-total-amt">$${revData.sessionRealized.toLocaleString()}</div></div>`;
+
   const unknownEl = document.getElementById('unknownItems');
   if(revData.unknown && revData.unknown.length > 0) {
     const uByPlan={};
@@ -466,7 +504,7 @@ function renderTrainer(trainerData) {
 
 // ── BOSS TAB ───────────────────────────────────────────
 function renderBoss(trainerData,revData) {
-  const {rentTotal,memberRecognized,totalRevenue,rent,member}=revData;
+  const {rentTotal,memberRecognized,totalRevenue,sessionRealized,rent,member}=revData;
   const totalSessions=trainerData.reduce((s,r)=>s+r.total,0);
   const trainerAmt=trainerData.reduce((s,r)=>s+r.arrAmt,0);
   const trainerCount=[...new Set(trainerData.map(r=>r.trainer))].length;
@@ -485,9 +523,10 @@ function renderBoss(trainerData,revData) {
     <div style="margin-bottom:1.5rem">
       <div class="card-title" style="margin-bottom:.75rem">當期總覽</div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
-        <div class="metric accent"><div class="metric-label">當期收入</div><div class="metric-val">$${totalRevenue.toLocaleString()}</div><div class="metric-sub">場租 + 會籍</div></div>
-        <div class="metric accent"><div class="metric-label">教練銷課</div><div class="metric-val">${totalSessions} 堂</div><div class="metric-sub">${trainerCount} 位教練・$${trainerAmt.toLocaleString()}</div></div>
-        <div class="metric"><div class="metric-label">場租儲值</div><div class="metric-val">$${rentTotal.toLocaleString()}</div><div class="metric-sub">會籍認列 $${memberRecognized.toLocaleString()}</div></div>
+        <div class="metric accent"><div class="metric-label">當期實現收入</div><div class="metric-val">$${totalRevenue.toLocaleString()}</div><div class="metric-sub">銷課核銷 + 會籍</div></div>
+        <div class="metric accent"><div class="metric-label">銷課實現</div><div class="metric-val">$${sessionRealized.toLocaleString()}</div><div class="metric-sub">${totalSessions} 堂・${trainerCount} 位教練</div></div>
+        <div class="metric"><div class="metric-label">會籍認列</div><div class="metric-val">$${memberRecognized.toLocaleString()}</div><div class="metric-sub"> </div></div>
+        <div class="metric" style="border-style:dashed"><div class="metric-label" style="color:var(--text3)">場租預收款</div><div class="metric-val" style="color:var(--text3)">$${rentTotal.toLocaleString()}</div><div class="metric-sub">現金流入</div></div>
         ${revData.unknown&&revData.unknown.length>0?`<div class="metric" style="border-color:#e8a800;background:#fffbf0"><div class="metric-label" style="color:#7a5000">⚠️ 未識別品項</div><div class="metric-val" style="color:#7a5000;font-size:16px">${revData.unknown.length} 筆・$${revData.unknown.reduce((s,r)=>s+r.amt,0).toLocaleString()}</div><div class="metric-sub" style="color:#7a5000">請至收入認列分頁查看</div></div>`:''}
       </div>
     </div>
@@ -635,8 +674,8 @@ function renderCompare(curTrainer,curRev,prvTrainer,prvRev) {
       <div class="cmp-grid">
         <div>
           <div class="cmp-label">上期</div>
-          <div class="cmp-row"><span class="cmp-row-label">總收入</span><span class="cmp-val">$${prvRev.totalRevenue.toLocaleString()}</span></div>
-          <div class="cmp-row"><span class="cmp-row-label">場租儲值</span><span class="cmp-val">$${prvRev.rentTotal.toLocaleString()}</span></div>
+          <div class="cmp-row"><span class="cmp-row-label">實現收入</span><span class="cmp-val">$${prvRev.totalRevenue.toLocaleString()}</span></div>
+          <div class="cmp-row"><span class="cmp-row-label">場租預收款</span><span class="cmp-val">$${prvRev.rentTotal.toLocaleString()}</span></div>
           <div class="cmp-row"><span class="cmp-row-label">會籍認列</span><span class="cmp-val">$${prvRev.memberRecognized.toLocaleString()}</span></div>
           <div class="cmp-row"><span class="cmp-row-label">銷課堂數</span><span class="cmp-val">${prvSess} 堂</span></div>
           <div class="cmp-row"><span class="cmp-row-label">銷課金額</span><span class="cmp-val">$${prvAmt.toLocaleString()}</span></div>
@@ -644,8 +683,8 @@ function renderCompare(curTrainer,curRev,prvTrainer,prvRev) {
         </div>
         <div>
           <div class="cmp-label">本期 vs 上期</div>
-          <div class="cmp-row"><span class="cmp-row-label">總收入</span><span><span class="cmp-val">$${curRev.totalRevenue.toLocaleString()}</span> ${delta(curRev.totalRevenue,prvRev.totalRevenue)}</span></div>
-          <div class="cmp-row"><span class="cmp-row-label">場租儲值</span><span><span class="cmp-val">$${curRev.rentTotal.toLocaleString()}</span> ${delta(curRev.rentTotal,prvRev.rentTotal)}</span></div>
+          <div class="cmp-row"><span class="cmp-row-label">實現收入</span><span><span class="cmp-val">$${curRev.totalRevenue.toLocaleString()}</span> ${delta(curRev.totalRevenue,prvRev.totalRevenue)}</span></div>
+          <div class="cmp-row"><span class="cmp-row-label">場租預收款</span><span><span class="cmp-val">$${curRev.rentTotal.toLocaleString()}</span> ${delta(curRev.rentTotal,prvRev.rentTotal)}</span></div>
           <div class="cmp-row"><span class="cmp-row-label">會籍認列</span><span><span class="cmp-val">$${curRev.memberRecognized.toLocaleString()}</span> ${delta(curRev.memberRecognized,prvRev.memberRecognized)}</span></div>
           <div class="cmp-row"><span class="cmp-row-label">銷課堂數</span><span><span class="cmp-val">${curSess} 堂</span> ${delta(curSess,prvSess,false)}</span></div>
           <div class="cmp-row"><span class="cmp-row-label">銷課金額</span><span><span class="cmp-val">$${curAmt.toLocaleString()}</span> ${delta(curAmt,prvAmt)}</span></div>
