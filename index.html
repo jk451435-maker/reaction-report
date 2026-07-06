@@ -139,7 +139,7 @@ tfoot td { border-top: 1.5px solid var(--border2); padding: 10px; font-weight: 7
   <div id="uploadSection">
     <div class="upload-month">
       <div class="upload-month-label">📅 本期資料</div>
-      <div class="upload-area">
+      <div class="upload-area" style="grid-template-columns:1fr 1fr 1fr">
         <div class="upload-box" id="box1" onclick="document.getElementById('file1').click()">
           <span class="upload-icon">📋</span>
           <div class="upload-title">課表預約明細</div>
@@ -153,6 +153,13 @@ tfoot td { border-top: 1.5px solid var(--border2); padding: 10px; font-weight: 7
           <div class="upload-sub">交易報表_*.xlsx</div>
           <div class="upload-filename" id="name2"></div>
           <input type="file" id="file2" accept=".xlsx,.xls">
+        </div>
+        <div class="upload-box" id="box5" onclick="document.getElementById('file5').click()">
+          <span class="upload-icon">🚪</span>
+          <div class="upload-title">進出場記錄（選填）</div>
+          <div class="upload-sub">用於計算自主訓練會員產能</div>
+          <div class="upload-filename" id="name5"></div>
+          <input type="file" id="file5" accept=".xlsx,.xls">
         </div>
       </div>
     </div>
@@ -185,7 +192,7 @@ tfoot td { border-top: 1.5px solid var(--border2); padding: 10px; font-weight: 7
       <button class="tab active" onclick="switchTab('boss')">老闆摘要</button>
       <button class="tab" onclick="switchTab('revenue')">收入認列</button>
       <button class="tab" onclick="switchTab('trainer')">教練銷課</button>
-      <button class="tab" onclick="switchTab('inventory')">庫存預警</button>
+      <button class="tab" onclick="switchTab('capacity')">產能利用率</button>
       <button class="tab" onclick="switchTab('chart')">教練分層</button>
       <button class="tab" id="compareTab" style="display:none" onclick="switchTab('compare')">月份比較</button>
     </div>
@@ -220,7 +227,7 @@ tfoot td { border-top: 1.5px solid var(--border2); padding: 10px; font-weight: 7
     <div class="tab-panel" id="tab-chart">
       <div id="chart-content"></div>
     </div>
-    <div class="tab-panel" id="tab-inventory"><div id="inventory-content"></div></div>
+    <div class="tab-panel" id="tab-capacity"><div id="capacity-content"></div></div>
     <div class="tab-panel" id="tab-compare"><div id="compare-content"></div></div>
 
     <div class="footer-actions">
@@ -232,10 +239,11 @@ tfoot td { border-top: 1.5px solid var(--border2); padding: 10px; font-weight: 7
 
 <script>
 // ── STATE ──────────────────────────────────────────────
-let rawSchedule=null, rawTx=null, rawSchedulePrev=null, rawTxPrev=null;
+let rawSchedule=null, rawTx=null, rawSchedulePrev=null, rawTxPrev=null, rawEntryLog=null;
 let periodText='', periodTextPrev='';
 let chart1Instance=null, chart2Instance=null, chart3Instance=null;
 let exportTrainer=[], exportRevenue={};
+let trainerSortKey='total', trainerSortDir='desc';
 let prevTrainer=[], prevRevenue={};
 
 // ── FILE HANDLING ──────────────────────────────────────
@@ -256,7 +264,8 @@ function readFile(file,slot,nameId,boxId) {
     if(slot===1) rawSchedule=raw;
     else if(slot===2) rawTx=raw;
     else if(slot===3) rawSchedulePrev=raw;
-    else rawTxPrev=raw;
+    else if(slot===4) rawTxPrev=raw;
+    else rawEntryLog=raw;
     document.getElementById(nameId).textContent=file.name;
     document.getElementById(boxId).classList.add('loaded');
     checkReady();
@@ -270,7 +279,7 @@ function checkReady() {
     btn.textContent='▶ 開始分析';
   }
 }
-[1,2,3,4].forEach(i=>setupDrop('box'+i,'file'+i,'name'+i,i));
+[1,2,3,4,5].forEach(i=>setupDrop('box'+i,'file'+i,'name'+i,i));
 document.getElementById('runBtn').addEventListener('click', analyze);
 
 // ── PARSE SCHEDULE ─────────────────────────────────────
@@ -373,7 +382,7 @@ function analyze() {
   renderBoss(trainerData,revData);
   renderRevenue(trainerData,revData);
   renderTrainer(trainerData);
-  renderInventory(trainerData,revData);
+  renderCapacity(trainerData,rawSchedule,rawEntryLog);
   renderCharts(trainerData,revData,prevTrainer);
   document.getElementById('uploadSection').style.display='none';
   document.getElementById('results').style.display='block';
@@ -470,6 +479,7 @@ function renderRevenue(trainerData,revData) {
 
 // ── TRAINER TAB ────────────────────────────────────────
 function renderTrainer(trainerData) {
+  _lastTrainerData=trainerData;
   const totalSessions=trainerData.reduce((s,r)=>s+r.total,0);
   const trainerAmt=trainerData.reduce((s,r)=>s+r.arrAmt,0);
   document.getElementById('trainer-metrics').innerHTML=`
@@ -480,14 +490,23 @@ function renderTrainer(trainerData) {
     if(!data.length) return '';
     const tot=data.reduce((s,r)=>s+r.total,0);
     const amt=data.reduce((s,r)=>s+r.arrAmt,0);
-    const rows=data.map(r=>`<tr><td>${r.trainer}</td><td class="r">$${r.price}</td><td class="r">${r.total}</td><td class="r">$${r.arrAmt.toLocaleString()}</td></tr>`).join('');
+    // sort by current state
+    const sorted=[...data].sort((a,b)=>{
+      let av,bv;
+      if(trainerSortKey==='total'){av=a.total;bv=b.total;}
+      else if(trainerSortKey==='amt'){av=a.arrAmt;bv=b.arrAmt;}
+      else{return a.trainer.localeCompare(b.trainer,'zh');}
+      return trainerSortDir==='desc'?bv-av:av-bv;
+    });
+    const rows=sorted.map(r=>`<tr><td>${r.trainer}</td><td class="r">$${r.price}</td><td class="r">${r.total}</td><td class="r">$${r.arrAmt.toLocaleString()}</td></tr>`).join('');
+    const arrow=k=>trainerSortKey===k?(trainerSortDir==='desc'?' ▼':' ▲'):'';
     return `<div style="margin-bottom:1.25rem">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <span class="badge ${badgeClass}" style="font-size:11px;padding:3px 10px">${label}</span>
         <span style="font-size:11px;color:var(--text3);font-family:var(--mono)">${data.length} 位教練・${tot} 堂・$${amt.toLocaleString()}</span>
       </div>
       <table>
-        <thead><tr><th>教練</th><th class="r">單價</th><th class="r">銷課堂數</th><th class="r">銷課金額</th></tr></thead>
+        <thead><tr><th>教練</th><th class="r">單價</th><th class="r" style="cursor:pointer;user-select:none" onclick="sortTrainer('total')">銷課堂數${arrow('total')}</th><th class="r" style="cursor:pointer;user-select:none" onclick="sortTrainer('amt')">銷課金額${arrow('amt')}</th></tr></thead>
         <tbody>${rows}</tbody>
         <tfoot><tr><td>小計</td><td></td><td class="r">${tot}</td><td class="r">$${amt.toLocaleString()}</td></tr></tfoot>
       </table></div>`;
@@ -500,6 +519,14 @@ function renderTrainer(trainerData) {
     section(d1v1,'1v1 一對一','b1v1')+section(d1v2,'1v2 一對二','b1v2')+
     `<div style="border-top:1.5px solid var(--border2);padding-top:10px;display:flex;justify-content:space-between;font-size:13px;font-weight:700">
       <span>總合計</span><span style="font-family:var(--mono)">${totalSess} 堂・$${totalAmt.toLocaleString()}</span></div>`;
+}
+
+// ── TRAINER SORT ──────────────────────────────────────
+let _lastTrainerData=null;
+function sortTrainer(key) {
+  if(trainerSortKey===key){trainerSortDir=trainerSortDir==='desc'?'asc':'desc';}
+  else{trainerSortKey=key;trainerSortDir='desc';}
+  if(_lastTrainerData) renderTrainer(_lastTrainerData);
 }
 
 // ── BOSS TAB ───────────────────────────────────────────
@@ -546,101 +573,141 @@ function renderBoss(trainerData,revData) {
     </div>`;
 }
 
-// ── INVENTORY TAB ─────────────────────────────────────
-function renderInventory(trainerData, revData) {
-  const purchases = revData.purchases || [];
+// ── ENTRY LOG PARSING (自主訓練會員) ──────────────────
+const ENTRY_LOG_EXCLUDE = ['員工進出場方案','麋鹿會籍','自由教練入場'];
 
-  // 本期有購堂的教練
-  const boughtSet = new Set();
-  purchases.forEach(p => {
-    const key = p.name.trim();
-    boughtSet.add(key);
-    // also add partial matches
+function parseEntryLog(raw) {
+  if (!raw || raw.length < 2) return { count: 0, items: [] };
+  const headers = raw[0].map(h => String(h));
+  const rows = raw.slice(1).filter(r => r.some(c => c !== ''));
+  const col = name => headers.indexOf(name);
+  const iCat = col('類別'), iPlan = col('進場方案/預約名稱'), iName = col('姓名'), iDate = col('進場日期');
+
+  const items = [];
+  rows.forEach(r => {
+    const cat = String(r[iCat]||'').trim();
+    const plan = String(r[iPlan]||'').trim();
+    const name = String(r[iName]||'').trim();
+    const date = String(r[iDate]||'').trim();
+    if (cat !== '定期通行卡') return; // 排除計次卡、課程進出場（已算在課表）
+    if (ENTRY_LOG_EXCLUDE.includes(plan)) return; // 排除員工、麋鹿、自由教練入場
+    items.push({ name, plan, date });
   });
+  return { count: items.length, items };
+}
 
-  // 所有有銷課的教練
-  const usageMap = {};
-  trainerData.forEach(r => {
-    const key = r.trainer.trim();
-    if (!usageMap[key]) usageMap[key] = { sessions: 0 };
-    usageMap[key].sessions += r.total;
-  });
+// ── CAPACITY UTILIZATION ──────────────────────────────
+const CAPACITY_PER_SLOT = 30; // 場館同時容納人數
+const WEEKDAY_HOURS = 14; // 平日 08-22
+const WEEKEND_HOURS = 10; // 假日 08-18
+const SESSION_MINUTES = 60;
 
-  // 購堂彙總（fuzzy match）
-  const purchaseMap = {};
-  purchases.forEach(p => {
-    const key = p.name.trim();
-    if (!purchaseMap[key]) purchaseMap[key] = { qty: 0, plans: [] };
-    purchaseMap[key].qty += p.qty;
-    purchaseMap[key].plans.push(p.plan.replace(/場租\//,'').replace(/	/g,''));
-  });
+function parseDateRange(raw) {
+  const title = raw[0][0] || '';
+  const m = title.match(/(\d{4}\/\d{2}\/\d{2})[~～](\d{4}\/\d{2}\/\d{2})/);
+  if (!m) return null;
+  const start = new Date(m[1]);
+  const end = new Date(m[2]);
+  return { start, end };
+}
 
-  function hasPurchase(trainerName) {
-    if (purchaseMap[trainerName]) return purchaseMap[trainerName];
-    for (const key of Object.keys(purchaseMap)) {
-      if (trainerName.includes(key) || key.includes(trainerName)) return purchaseMap[key];
-    }
-    return null;
+function calcCapacity(dateRange) {
+  if (!dateRange) return null;
+  let weekdays = 0, weekends = 0;
+  const cur = new Date(dateRange.start);
+  while (cur <= dateRange.end) {
+    const day = cur.getDay();
+    if (day === 0 || day === 6) weekends++;
+    else weekdays++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  const weekdaySlots = (WEEKDAY_HOURS * 60 / SESSION_MINUTES) * CAPACITY_PER_SLOT * weekdays;
+  const weekendSlots = (WEEKEND_HOURS * 60 / SESSION_MINUTES) * CAPACITY_PER_SLOT * weekends;
+  return { weekdays, weekends, totalCapacity: Math.round(weekdaySlots + weekendSlots) };
+}
+
+function renderCapacity(trainerData, rawScheduleRaw, entryLogRaw) {
+  const dateRange = parseDateRange(rawScheduleRaw);
+  const cap = calcCapacity(dateRange);
+  const totalSessions = trainerData.reduce((s,r)=>s+r.total,0);
+
+  if (!cap) {
+    document.getElementById('capacity-content').innerHTML = `<div class="card"><p style="font-size:13px;color:var(--text3)">無法判斷期間長度，請確認課表檔案的標題格式。</p></div>`;
+    return;
   }
 
-  const needContact = [];
-  const hasBought = [];
+  // 1v1 佔用2人額度（教練+學員），1v2 佔用3人額度（教練+2學員）
+  const d1v1 = trainerData.filter(r=>!r.course.toLowerCase().includes('1v2')&&!r.course.includes('一對二'));
+  const d1v2 = trainerData.filter(r=>r.course.toLowerCase().includes('1v2')||r.course.includes('一對二'));
+  const sessions1v1 = d1v1.reduce((s,r)=>s+r.total,0);
+  const sessions1v2 = d1v2.reduce((s,r)=>s+r.total,0);
+  const trainerHeadcount = sessions1v1*2 + sessions1v2*3;
 
-  Object.entries(usageMap).sort((a,b)=>b[1].sessions-a[1].sessions).forEach(([name, u]) => {
-    const p = hasPurchase(name);
-    if (p) {
-      hasBought.push({ name, sessions: u.sessions, bought: p.qty, plans: p.plans });
-    } else {
-      needContact.push({ name, sessions: u.sessions });
-    }
-  });
+  // 自主訓練會員（進出場記錄），每人次佔1人額度
+  const entryLog = parseEntryLog(entryLogRaw);
+  const selfTrainHeadcount = entryLog.count;
 
-  document.getElementById('inventory-content').innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:1.5rem">
-      <div class="metric" style="${needContact.length>0?'border-color:#c0392b;background:#fdf0ef':''}">
-        <div class="metric-label" style="${needContact.length>0?'color:#8b2020':''}">本期未購堂</div>
-        <div class="metric-val" style="${needContact.length>0?'color:#8b2020':''}">${needContact.length} 位</div>
-        <div class="metric-sub">${needContact.length>0?'需要主動聯繫':'—'}</div>
+  const usedHeadcount = trainerHeadcount + selfTrainHeadcount;
+  const usageRate = cap.totalCapacity ? (usedHeadcount / cap.totalCapacity * 100) : 0;
+  const idle = cap.totalCapacity - usedHeadcount;
+  const idleRate = 100 - usageRate;
+
+  function rateColor(rate) {
+    if (rate >= 70) return 'var(--green)';
+    if (rate >= 40) return 'var(--amber)';
+    return 'var(--red)';
+  }
+
+  document.getElementById('capacity-content').innerHTML = `
+    <div class="card" style="margin-bottom:1.25rem">
+      <div class="card-title">產能假設</div>
+      <p style="font-size:12px;color:var(--text2);line-height:1.6">
+        場館同時容納 <b>${CAPACITY_PER_SLOT}</b> 人（含教練）・每堂 <b>${SESSION_MINUTES}</b> 分鐘・
+        平日營業 <b>${WEEKDAY_HOURS}</b> 小時（08-22）・假日營業 <b>${WEEKEND_HOURS}</b> 小時（08-18）<br>
+        1v1 佔用 <b>2人</b>額度（教練+學員）・1v2 佔用 <b>3人</b>額度（教練+2學員）
+      </p>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:1.5rem">
+      <div class="metric accent">
+        <div class="metric-label">使用率</div>
+        <div class="metric-val" style="color:${rateColor(usageRate)}">${usageRate.toFixed(1)}%</div>
+        <div class="metric-sub">${cap.weekdays}個平日・${cap.weekends}個假日</div>
       </div>
-      <div class="metric" style="border-color:var(--green);background:var(--green-bg)">
-        <div class="metric-label" style="color:var(--green)">本期有購堂</div>
-        <div class="metric-val" style="color:var(--green)">${hasBought.length} 位</div>
-        <div class="metric-sub">庫存正常</div>
+      <div class="metric">
+        <div class="metric-label">理論人數產能</div>
+        <div class="metric-val">${cap.totalCapacity.toLocaleString()}</div>
+        <div class="metric-sub">人次（本期）</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">實際使用人次</div>
+        <div class="metric-val">${usedHeadcount.toLocaleString()}</div>
+        <div class="metric-sub">教練課 ${trainerHeadcount}・自主訓練 ${selfTrainHeadcount}</div>
       </div>
     </div>
-
-    ${needContact.length > 0 ? `
-    <div class="card" style="border-color:#c0392b;background:#fdf0ef;margin-bottom:1.25rem">
-      <div class="card-title" style="color:#8b2020;margin-bottom:.5rem">🔴 本期未見購堂，需要聯繫（${needContact.length} 位）</div>
-      <p style="font-size:12px;color:#8b2020;margin-bottom:1rem">這些教練本期有銷課但沒有購堂紀錄，表示在消耗舊庫存，要主動跟進是否需要續買。</p>
-      <table>
-        <thead><tr><th>教練</th><th class="r">本期銷課堂數</th><th>建議行動</th></tr></thead>
-        <tbody>${needContact.map(r=>`
-          <tr>
-            <td><strong>${r.name}</strong></td>
-            <td class="r">${r.sessions}</td>
-            <td style="font-size:12px;color:#8b2020">主動詢問是否需要續購</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>` : `
-    <div class="card" style="border-color:var(--green);background:var(--green-bg);margin-bottom:1.25rem">
-      <div style="text-align:center;padding:1rem;color:var(--green);font-size:14px;font-weight:500">✅ 本期所有教練均有購堂紀錄</div>
-    </div>`}
-
-    <div class="card">
-      <div class="card-title">✅ 本期有購堂教練（${hasBought.length} 位）</div>
-      <table>
-        <thead><tr><th>教練</th><th class="r">本期銷課</th><th class="r">本期購堂</th><th>購堂方案</th></tr></thead>
-        <tbody>${hasBought.map(r=>`
-          <tr>
-            <td>${r.name}</td>
-            <td class="r">${r.sessions}</td>
-            <td class="r c-green">${r.bought}</td>
-            <td style="font-size:11px;color:var(--text3)">${r.plans.join('、')}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
+    <div class="card" style="${idleRate>60?'border-color:#c0392b;background:#fdf0ef':idleRate>30?'border-color:#e8a800;background:#fffbf0':'border-color:var(--green);background:var(--green-bg)'}">
+      <div class="card-title" style="${idleRate>60?'color:#8b2020':idleRate>30?'color:#7a5000':'color:var(--green)'}">
+        ${idleRate>60?'🔴':idleRate>30?'🟡':'✅'} 閒置產能
+      </div>
+      <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px">
+        <span style="font-size:28px;font-weight:700;color:${idleRate>60?'#8b2020':idleRate>30?'#7a5000':'var(--green)'}">${idle.toLocaleString()}</span>
+        <span style="font-size:13px;color:var(--text3)">人次未被使用（${idleRate.toFixed(1)}%）</span>
+      </div>
+      <div style="background:rgba(0,0,0,0.06);border-radius:6px;height:10px;overflow:hidden;display:flex">
+        <div style="width:${usageRate}%;background:${rateColor(usageRate)};height:100%"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--text3)">
+        <span>已使用 ${usageRate.toFixed(1)}%</span>
+        <span>閒置 ${idleRate.toFixed(1)}%</span>
+      </div>
+    </div>
+    <div class="card" style="margin-top:1.25rem">
+      <div class="card-title">使用人次拆解</div>
+      <div class="rev-item"><div class="rev-name">教練課（1v1 ${sessions1v1}堂・1v2 ${sessions1v2}堂）</div><div class="rev-amt">${trainerHeadcount.toLocaleString()} 人次</div></div>
+      <div class="rev-item"><div class="rev-name">自主訓練會員${entryLogRaw?'':'（未上傳進出場記錄）'}</div><div class="rev-amt">${selfTrainHeadcount.toLocaleString()} 人次</div></div>
+      <div class="rev-total"><div class="rev-total-label">合計</div><div class="rev-total-amt">${usedHeadcount.toLocaleString()} 人次</div></div>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-top:8px">
+      ＊理論產能以人次計算（30人含教練），1v1佔2人額度、1v2佔3人額度，自主訓練會員每人次佔1人額度。實際可能因課程種類、教練排班、空間切割等因素有所差異，僅供參考趨勢。
     </div>`;
 }
 
@@ -812,7 +879,7 @@ function renderCharts(trainerData, revData, prevTrainerData) {
 
 // ── TABS ───────────────────────────────────────────────
 function switchTab(id) {
-  const ids=['boss','revenue','trainer','inventory','chart','compare'];
+  const ids=['boss','revenue','trainer','capacity','chart','compare'];
   document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',ids[i]===id));
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('tab-'+id).classList.add('active');
@@ -850,7 +917,8 @@ document.getElementById('dlBtn').addEventListener('click',()=>{
 function resetAll() {
   rawSchedule=rawTx=rawSchedulePrev=rawTxPrev=null;
   periodText=periodTextPrev='';
-  [1,2,3,4].forEach(i=>{document.getElementById('file'+i).value='';document.getElementById('name'+i).textContent='';document.getElementById('box'+i).classList.remove('loaded');});
+  [1,2,3,4,5].forEach(i=>{document.getElementById('file'+i).value='';document.getElementById('name'+i).textContent='';document.getElementById('box'+i).classList.remove('loaded');});
+  rawEntryLog=null;
   document.getElementById('runBtn').disabled=true;
   document.getElementById('runBtn').textContent='上傳本期兩個檔案後自動分析';
   document.getElementById('results').style.display='none';
