@@ -542,10 +542,18 @@ function renderBoss(trainerData,revData) {
   const trainerMap={};
   trainerData.forEach(r=>{if(!trainerMap[r.trainer])trainerMap[r.trainer]={sessions:0,amt:0};trainerMap[r.trainer].sessions+=r.total;trainerMap[r.trainer].amt+=r.arrAmt;});
   const ranked=Object.entries(trainerMap).sort((a,b)=>b[1].amt-a[1].amt);
-  const allRevRows=[
-    ...Object.values(rentByPlan).sort((a,b)=>b.total-a.total).map(p=>({name:p.plan,count:p.count,amt:p.total,cat:'場租'})),
-    ...Object.values(memByPlan).sort((a,b)=>b.recognized-a.recognized).map(p=>({name:p.plan,count:p.count,amt:p.recognized,cat:'會籍'}))
-  ].sort((a,b)=>b.amt-a.amt);
+  // 實現收入組成：銷課實現（依方案別）+ 會籍認列
+  const d1v1r=trainerData.filter(r=>!r.course.toLowerCase().includes('1v2')&&!r.course.includes('一對二'));
+  const d1v2r=trainerData.filter(r=>r.course.toLowerCase().includes('1v2')||r.course.includes('一對二'));
+  const sess1v1amt=d1v1r.reduce((s,r)=>s+r.arrAmt,0), sess1v1cnt=d1v1r.reduce((s,r)=>s+r.total,0);
+  const sess1v2amt=d1v2r.reduce((s,r)=>s+r.arrAmt,0), sess1v2cnt=d1v2r.reduce((s,r)=>s+r.total,0);
+  const realizedRows=[
+    ...(sess1v1cnt>0?[{name:'銷課實現（1v1）',count:sess1v1cnt+' 堂',amt:sess1v1amt,cat:'銷課'}]:[]),
+    ...(sess1v2cnt>0?[{name:'銷課實現（1v2）',count:sess1v2cnt+' 堂',amt:sess1v2amt,cat:'銷課'}]:[]),
+    ...Object.values(memByPlan).sort((a,b)=>b.recognized-a.recognized).map(p=>({name:p.plan,count:p.count+' 筆',amt:p.recognized,cat:'會籍'}))
+  ];
+  // 場租預收款（現金流入）
+  const prepaidRows=Object.values(rentByPlan).sort((a,b)=>b.total-a.total).map(p=>({name:p.plan,count:p.count,amt:p.total}));
   document.getElementById('boss-content').innerHTML=`
     <div style="margin-bottom:1.5rem">
       <div class="card-title" style="margin-bottom:.75rem">當期總覽</div>
@@ -558,11 +566,19 @@ function renderBoss(trainerData,revData) {
       </div>
     </div>
     <div class="two-col">
-      <div class="card">
-        <div class="card-title">收入來源</div>
-        <table><thead><tr><th>品項</th><th>類型</th><th class="r">筆數</th><th class="r">金額</th></tr></thead>
-        <tbody>${allRevRows.map(r=>`<tr><td>${r.name}</td><td><span class="badge ${r.cat==='場租'?'b1v1':'b1v2'}" style="font-size:10px">${r.cat}</span></td><td class="r">${r.count}</td><td class="r">$${r.amt.toLocaleString()}</td></tr>`).join('')}</tbody>
-        <tfoot><tr><td colspan="3">合計</td><td class="r">$${totalRevenue.toLocaleString()}</td></tr></tfoot></table>
+      <div>
+        <div class="card" style="margin-bottom:1.25rem">
+          <div class="card-title">實現收入組成（計入營收）</div>
+          <table><thead><tr><th>品項</th><th>類型</th><th class="r">數量</th><th class="r">金額</th></tr></thead>
+          <tbody>${realizedRows.map(r=>`<tr><td>${r.name}</td><td><span class="badge ${r.cat==='銷課'?'b1v1':'b1v2'}" style="font-size:10px">${r.cat}</span></td><td class="r">${r.count}</td><td class="r">$${r.amt.toLocaleString()}</td></tr>`).join('')}</tbody>
+          <tfoot><tr><td colspan="3">實現收入合計</td><td class="r">$${totalRevenue.toLocaleString()}</td></tr></tfoot></table>
+        </div>
+        <div class="card" style="border-style:dashed">
+          <div class="card-title" style="color:var(--text3)">場租預收款（現金流入，未計入營收）</div>
+          <table><thead><tr><th>品項</th><th class="r">筆數</th><th class="r">金額</th></tr></thead>
+          <tbody>${prepaidRows.map(r=>`<tr><td>${r.name}</td><td class="r">${r.count}</td><td class="r" style="color:var(--text3)">$${r.amt.toLocaleString()}</td></tr>`).join('')}</tbody>
+          <tfoot><tr><td colspan="2" style="color:var(--text3)">預收款合計</td><td class="r" style="color:var(--text3)">$${rentTotal.toLocaleString()}</td></tr></tfoot></table>
+        </div>
       </div>
       <div class="card">
         <div class="card-title">教練銷課排名</div>
