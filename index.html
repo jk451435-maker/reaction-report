@@ -389,6 +389,18 @@ function analyze() {
 }
 
 // ── REVENUE TAB ────────────────────────────────────────
+function mergeByName(items) {
+  const m=new Map();
+  items.forEach(r=>{
+    if(!m.has(r.name)) m.set(r.name,{name:r.name,n:0,dates:[],amt:0,recognized:0,notes:[]});
+    const g=m.get(r.name);
+    g.n++; g.amt+=r.amt||0; g.recognized+=r.recognized||0;
+    if(r.date) g.dates.push(r.date);
+    if(r.note&&!g.notes.includes(r.note)) g.notes.push(r.note);
+  });
+  return [...m.values()];
+}
+
 function renderRevenue(trainerData,revData) {
   const {rent,member,rentTotal,memberRecognized,totalRevenue,sessionRealized}=revData;
   document.getElementById('rev-metrics').innerHTML=`
@@ -403,7 +415,7 @@ function renderRevenue(trainerData,revData) {
     rentByPlan[r.plan].count++; rentByPlan[r.plan].total+=r.amt; rentByPlan[r.plan].items.push(r);
   });
   const rentHTML=Object.values(rentByPlan).sort((a,b)=>b.total-a.total).map((p,i)=>{
-    const details=p.items.map(r=>`<div class="detail-row"><span class="detail-name">${r.name}</span><span class="detail-date">${r.date}</span><span class="detail-amt">$${r.amt.toLocaleString()}</span></div>`).join('');
+    const details=mergeByName(p.items).map(r=>`<div class="detail-row"><span class="detail-name">${r.name}${r.n>1?`<span class="count-badge">×${r.n}</span>`:''}</span><span class="detail-date">${r.dates.join('、')}</span><span class="detail-amt">$${r.amt.toLocaleString()}</span></div>`).join('');
     return `<div class="rev-group"><div class="rev-item expandable" onclick="toggleDetail('rent-${i}')">
       <div style="flex:1"><div class="rev-name">${p.plan} <span class="count-badge">${p.count} 筆</span></div></div>
       <div style="display:flex;align-items:center;gap:10px"><div class="rev-amt">$${p.total.toLocaleString()}</div><span class="expand-icon" id="icon-rent-${i}">▸</span></div>
@@ -417,7 +429,7 @@ function renderRevenue(trainerData,revData) {
     memByPlan[r.plan].count++; memByPlan[r.plan].recognized+=r.recognized; memByPlan[r.plan].items.push(r);
   });
   const memHTML=Object.values(memByPlan).sort((a,b)=>b.recognized-a.recognized).map((p,i)=>{
-    const details=p.items.map(r=>`<div class="detail-row"><span class="detail-name">${r.name}</span><span class="detail-date">${r.date}</span><span class="detail-amt">$${r.recognized.toLocaleString()}${r.note?`<span class="detail-note">${r.note}</span>`:''}</span></div>`).join('');
+    const details=mergeByName(p.items).map(r=>`<div class="detail-row"><span class="detail-name">${r.name}${r.n>1?`<span class="count-badge">×${r.n}</span>`:''}</span><span class="detail-date">${r.dates.join('、')}</span><span class="detail-amt">$${r.recognized.toLocaleString()}${r.notes.length?`<span class="detail-note">${r.notes.join('；')}</span>`:''}</span></div>`).join('');
     return `<div class="rev-group"><div class="rev-item expandable" onclick="toggleDetail('mem-${i}')">
       <div style="flex:1"><div class="rev-name">${p.plan} <span class="count-badge">${p.count} 筆</span></div></div>
       <div style="display:flex;align-items:center;gap:10px"><div class="rev-amt">$${p.recognized.toLocaleString()}</div><span class="expand-icon" id="icon-mem-${i}">▸</span></div>
