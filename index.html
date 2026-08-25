@@ -848,8 +848,8 @@ function renderCharts(trainerData, revData, prevTrainerData) {
       return 'core';
     } else {
       // single period: by volume
-      if (cur.sessions >= 20) return 'core';
-      if (cur.sessions >= 8) return 'mid';
+      if (cur.sessions >= 30) return 'core';
+      if (cur.sessions >= 10) return 'mid';
       return 'low';
     }
   }
@@ -859,9 +859,9 @@ function renderCharts(trainerData, revData, prevTrainerData) {
         growing: { label:'📈 成長中', desc:'本期堂數明顯增加', color:'#2d6a2d', bg:'#eaf3e0', items:[] },
         watch: { label:'⚠️ 需關注', desc:'本期堂數明顯下滑', color:'#8b2020', bg:'#fdf0ef', items:[] },
         new: { label:'🆕 新進教練', desc:'上期未出現，本期首次', color:'#1a3d6b', bg:'#e8f0fb', items:[] } }
-    : { core: { label:'🏆 高量教練', desc:'≥ 20 堂', color:'#1a1908', bg:'#f0efe9', items:[] },
-        mid: { label:'📊 中量教練', desc:'8–19 堂', color:'#1a3d6b', bg:'#e8f0fb', items:[] },
-        low: { label:'🌱 低量教練', desc:'< 8 堂', color:'#7a5000', bg:'#fef3d8', items:[] } };
+    : { core: { label:'🏆 高量教練', desc:'30 堂以上', color:'#1a1908', bg:'#f0efe9', items:[] },
+        mid: { label:'📊 中量教練', desc:'10–29 堂', color:'#1a3d6b', bg:'#e8f0fb', items:[] },
+        low: { label:'🌱 低量教練', desc:'未滿 10 堂', color:'#7a5000', bg:'#fef3d8', items:[] } };
 
   trainers.forEach(([name, cur]) => {
     const tier = getTier(name, cur);
